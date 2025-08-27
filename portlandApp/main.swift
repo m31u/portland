@@ -1,4 +1,3 @@
-import AppKit
 import CoreLocation
 import CoreWLAN
 import Foundation
@@ -41,21 +40,22 @@ let isScreenUnlocked = NSNotification.Name("com.apple.screenIsUnlocked")
 class WiFiObserver: CWEventDelegate {
     private let client = CWWiFiClient.shared()
     private let center = DistributedNotificationCenter.default()
+    private var closeObserver: NSObjectProtocol?
     init() {
         client.delegate = self
         try! client.startMonitoringEvent(with: .linkDidChange)
         try! client.startMonitoringEvent(with: .modeDidChange)
         try! client.startMonitoringEvent(with: .ssidDidChange)
 
-        let _ = center.addObserver(forName: isScreenUnlocked, object: nil, queue: .main) {
+        closeObserver = center.addObserver(forName: isScreenUnlocked, object: nil, queue: .main) {
             [self] _ in
             if let interface = client.interface() {
                 postMode(withInterface: interface)
                 postSSID(withInterface: interface)
             }
         }
-
-        waitForHeartbeat()
+        
+        DispatchQueue.main.async(execute: waitForHeartbeat)
     }
 
     func waitForHeartbeat() {
@@ -90,7 +90,7 @@ class WiFiObserver: CWEventDelegate {
             return
         }
 
-        guard let url = URL(string: "http://localhost:3000/update-network") else {
+        guard let url = URL(string: "http://localhost:3000/update") else {
             return
         }
 
@@ -158,6 +158,9 @@ class WiFiObserver: CWEventDelegate {
 
     deinit {
         try! client.stopMonitoringAllEvents()
+        if let close = closeObserver {
+            center.removeObserver(close)
+        }
     }
 }
 
