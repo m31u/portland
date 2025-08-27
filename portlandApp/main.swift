@@ -8,8 +8,17 @@ enum WifiEvent {
     case WIFI_CONNECT
 }
 
-class LSRequester: NSObject, CLLocationManagerDelegate {
+class Logger {
+    static let file = URL(fileURLWithPath: "/tmp/portland.log")
+    
+    static func log(_ text: String) {
+        let out = "\(text)\n"
+    }
+}
+
+class WifiObserverPermissionManager: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
+    private let wifiObserver = WiFiObserver()
 
     var authorizationStatus: CLAuthorizationStatus {
         return manager.authorizationStatus
@@ -19,19 +28,38 @@ class LSRequester: NSObject, CLLocationManagerDelegate {
         super.init()
 
         manager.delegate = self
-        if manager.authorizationStatus == .notDetermined {
-            print("requesting")
-            manager.requestAlwaysAuthorization()
-        }
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         switch manager.authorizationStatus {
+        case .authorizedAlways:
+            print("Auth status changed starting observer")
+            wifiObserver.start()
+            return
+        case .authorized:
+            manager.requestAlwaysAuthorization()
+            return
+        case .denied:
+            print("user denied")
+            return
         case .notDetermined:
+            print("not determined")
             manager.requestAlwaysAuthorization()
         default:
             break
         }
+    }
+
+    func startObserverWithPermissions() {
+        print("\(manager.authorizationStatus)")
+        if manager.authorizationStatus == .authorizedAlways {
+            print("Already authorized starting observer")
+            wifiObserver.start()
+            return
+        }
+        print("requesting authorization")
+        manager.requestWhenInUseAuthorization()
+        return
     }
 }
 
@@ -40,21 +68,24 @@ let isScreenUnlocked = NSNotification.Name("com.apple.screenIsUnlocked")
 class WiFiObserver: CWEventDelegate {
     private let client = CWWiFiClient.shared()
     private let center = DistributedNotificationCenter.default()
-    private var closeObserver: NSObjectProtocol?
+    private var unlockObserver: NSObjectProtocol?
+
     init() {
         client.delegate = self
+    }
+
+    func start() {
         try! client.startMonitoringEvent(with: .linkDidChange)
         try! client.startMonitoringEvent(with: .modeDidChange)
         try! client.startMonitoringEvent(with: .ssidDidChange)
 
-        closeObserver = center.addObserver(forName: isScreenUnlocked, object: nil, queue: .main) {
+        unlockObserver = center.addObserver(forName: isScreenUnlocked, object: nil, queue: .main) {
             [self] _ in
             if let interface = client.interface() {
                 postMode(withInterface: interface)
                 postSSID(withInterface: interface)
             }
         }
-        
         DispatchQueue.main.async(execute: waitForHeartbeat)
     }
 
@@ -137,7 +168,6 @@ class WiFiObserver: CWEventDelegate {
             print("couldn't get specified interface \(interfaceName)")
             return
         }
-
         postMode(withInterface: interface)
     }
 
@@ -152,19 +182,17 @@ class WiFiObserver: CWEventDelegate {
             print("couldn't get specified interface \(interfaceName)")
             return
         }
-
         postSSID(withInterface: interface)
     }
 
     deinit {
         try! client.stopMonitoringAllEvents()
-        if let close = closeObserver {
-            center.removeObserver(close)
+        if let obs = unlockObserver {
+            center.removeObserver(obs)
         }
     }
 }
 
-let request = LSRequester()
-let observer = WiFiObserver()
+WifiObserverPermissionManager().startObserverWithPermissions()
 
 RunLoop.main.run()
