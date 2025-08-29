@@ -8,13 +8,6 @@ enum WifiEvent {
     case WIFI_CONNECT
 }
 
-class Logger {
-    static let file = URL(fileURLWithPath: "/tmp/portland.log")
-    
-    static func log(_ text: String) {
-        let out = "\(text)\n"
-    }
-}
 
 class WifiObserverPermissionManager: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
@@ -69,6 +62,7 @@ class WiFiObserver: CWEventDelegate {
     private let client = CWWiFiClient.shared()
     private let center = DistributedNotificationCenter.default()
     private var unlockObserver: NSObjectProtocol?
+    private var wsDaemonClient: WebSocketDaemonClient?
 
     init() {
         client.delegate = self
@@ -101,43 +95,29 @@ class WiFiObserver: CWEventDelegate {
                     deadline: .now() + 5.0, execute: waitForHeartbeat)
                 return
             }
-
-            if let interface = client.interface() {
-                postSSID(withInterface: interface)
+            
+            wsDaemonClient = WebSocketDaemonClient("http://localhost:3000/listen") { [self] in
+                if let interface = client.interface() {
+                    postMode(withInterface: interface)
+                    postSSID(withInterface: interface)
+                }
             }
         }
 
         task.resume()
     }
 
-    func postInfo(event: WifiEvent, data: [String: Any]) {
+    func sendInfo(event: WifiEvent, data: [String: Any]) {
+        guard let ws = wsDaemonClient else {
+            return
+        }
+        
         let payload: [String: Any] = [
             "type": "NETWORK_UPDATE_\(event)",
             "data": data,
         ]
-
-        guard let json = try? JSONSerialization.data(withJSONObject: payload) else {
-            print("Couldn't serialize payload")
-            return
-        }
-
-        guard let url = URL(string: "http://localhost:3000/update") else {
-            return
-        }
-
-        var req = URLRequest(url: url)
-
-        req.httpMethod = "POST"
-        req.httpBody = json
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let task = URLSession.shared.dataTask(with: req) { _, _, err in
-            if let err = err {
-                print("POST Error: \(err)")
-            }
-        }
-
-        task.resume()
+        
+        ws.send(data: payload)
     }
 
     func ssidDidChangeForWiFiInterface(withName interfaceName: String) {
@@ -156,10 +136,10 @@ class WiFiObserver: CWEventDelegate {
         let mode = interface.interfaceMode()
 
         if mode == .none {
-            postInfo(event: .WIFI_DISCONNECT, data: ["connected": false])
+            sendInfo(event: .WIFI_DISCONNECT, data: ["connected": false])
         }
         if mode == .station {
-            postInfo(event: .WIFI_CONNECT, data: ["connected": true])
+            sendInfo(event: .WIFI_CONNECT, data: ["connected": true])
         }
     }
 
@@ -173,7 +153,7 @@ class WiFiObserver: CWEventDelegate {
 
     func postSSID(withInterface interface: CWInterface) {
         if interface.interfaceMode() == .station {
-            postInfo(event: .SSID_CHANGE, data: ["ssid": interface.ssid() ?? "NO_PERMISSIONS"])
+            sendInfo(event: .SSID_CHANGE, data: ["ssid": interface.ssid() ?? "NO_PERMISSIONS"])
         }
     }
 
